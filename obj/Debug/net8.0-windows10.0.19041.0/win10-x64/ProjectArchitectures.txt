@@ -1,0 +1,1 @@
+C:\Users\Calum\source\repos\TradingBotMauiBlazorHybridApp\TradingBotMauiBlazorHybridApp.csproj;x64

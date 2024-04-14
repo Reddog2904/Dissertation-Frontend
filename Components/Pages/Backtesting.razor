@@ -1,0 +1,221 @@
+﻿@page "/"
+@using Microsoft.Extensions.Logging
+@using System.Text.Json
+@using System.Linq
+@inject HttpClient Http
+@inject ILogger<Index> Logger
+
+<h1>Backtesting</h1>
+
+<!-- Rule Selection -->
+<select @bind="selectedRuleId">
+    <option value="">-- Select a Rule --</option>
+    @foreach (var rule in rules)
+    {
+        <option value="@rule.RuleID">@rule.BuyLevel - @rule.SellLevel</option>
+    }
+</select>
+
+<!-- Set Date Range for Backtesting -->
+<h3>Set Date Range for Backtesting</h3>
+<InputDate @bind-Value="startDate" />
+<span> to </span>
+<InputDate @bind-Value="endDate" />
+
+<!-- Initiate Backtest Button -->
+<button class="btn btn-primary" @onclick="InitiateBacktest">Run Backtest</button>
+
+<!-- Trades Table -->
+@if (showTrades)
+{
+    <h3>Trades Details</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Trade #</th>
+                <th>Date</th>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>P/E Ratio</th>
+                <th>Share Price</th>
+                <th>Shares</th>
+                <th>Bank Account Balance</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var trade in trades)
+            {
+                <tr>
+                    <td>@trade.Number</td>
+                    <td>@trade.Date.ToString("dd/MM/yyyy")</td>
+                    <td>@trade.Symbol</td>
+                    <td>@trade.Type</td>
+                    <td>@string.Format("{0:0.00}", trade.PERatio)</td>
+                    <td>@string.Format("{0:0.00}", trade.PricePerShare)</td>
+                    <td>@trade.Shares</td>
+                    <td>@string.Format("{0:0.00}", trade.BankAccountBalance)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <!-- Displaying the overall backtest results -->
+    <h3>Overall Backtest Result</h3>
+    <div>
+        <p><strong>Final Total Balance:</strong> @string.Format("{0:0.00}", finalTotalBalance)</p>
+        <p><strong>Profit/Loss Percentage:</strong> @string.Format("{0:0.00}", profitLossPercentage) %</p>
+    </div>
+}
+
+
+@code {
+    private List<PERatioRuleData> rules = new List<PERatioRuleData>();
+    private int? selectedRuleId;
+    private DateTime startDate = DateTime.Today.AddMonths(-1);
+    private DateTime endDate = DateTime.Today;
+    private List<Trade> trades = new List<Trade>();
+    private bool showTrades = false;
+    private decimal finalTotalBalance;
+    private decimal profitLossPercentage;
+
+    // Asynchronously initializes the component when it is first rendered. 
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            Logger.LogInformation("Fetching P/E ratio rules...");
+
+            // Perform an HTTP GET request to the specified API endpoint to retrieve a list of P/E ratio rules.
+            rules = await Http.GetFromJsonAsync<List<PERatioRuleData>>("http://localhost:7144/api/GetPERatioRules");
+            Logger.LogInformation("Fetched rules successfully.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Error fetching rules: {ex.Message}");
+        }
+    }
+
+
+    // Initiates the backtesting process based on selected rules and date range.
+    // This method sends a request to the server and processes the response to display the backtest results.
+    private async Task InitiateBacktest()
+    {
+        // Check if a rule is selected and the start date is before the end date.
+        if (selectedRuleId.HasValue && startDate < endDate)
+        {
+            try
+            {
+                // Prepare the backtest request payload with the selected rule ID and the date range
+                var backtestRequest = new
+                {
+                    ruleId = selectedRuleId.Value,
+                    startDate = startDate.ToString("yyyy-MM-dd"),
+                    endDate = endDate.ToString("yyyy-MM-dd")
+                };
+
+                // Send an asynchronous POST request to the PerformBacktest function with the backtest request data.
+                var response = await Http.PostAsJsonAsync("http://localhost:7144/api/PerformBacktest", backtestRequest);
+
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                Logger.LogInformation($"Backtest response received: {responseContent}");
+
+
+                // Check if the response was successful.
+                if (response.IsSuccessStatusCode)
+                {
+                    try
+                    {
+
+                        // Define JSON serializer options.
+                        var options = new JsonSerializerOptions
+                            {
+                                PropertyNameCaseInsensitive = true,
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            };
+
+                        // Deserialize the response content into a BacktestResponse object.
+                        var backtestResult = JsonSerializer.Deserialize<BacktestResponse>(responseContent, options);
+
+                        // Check if the trades list in the result is not null and contains any elements.
+                        if (backtestResult?.Trades != null && backtestResult.Trades.Any())
+                        {
+                            // Sort trades by date.
+                            trades = backtestResult.Trades.OrderBy(t => t.Date).ToList();
+
+                            // Assign new trade numbers based on the sorted order.
+                            for (int i = 0; i < trades.Count; i++)
+                            {
+                                trades[i].Number = i + 1; // This will renumber the trades starting from 1.
+                            }
+
+                            // Store the final total balance and profit/loss percentage from the backtest results.
+                            finalTotalBalance = backtestResult.FinalTotalBalance;
+                            profitLossPercentage = backtestResult.ProfitLossPercentage;
+
+                            // Set flag to show trades in the UI.
+                            showTrades = true;
+                        }
+                        else
+                        {
+                            Logger.LogWarning("Deserialized trades is null or empty.");
+                            showTrades = false;
+                        }
+                    }
+                    catch (System.Text.Json.JsonException jsonEx)
+                    {
+                        Logger.LogError($"JSON Deserialization Error: {jsonEx.Message}");
+                        showTrades = false;
+                    }
+                }
+                else
+                {
+                    Logger.LogError($"Error during backtest: {response.ReasonPhrase}");
+                    showTrades = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Exception during backtest: {ex.Message}");
+                showTrades = false;
+            }
+        }
+        else
+        {
+            Logger.LogError("Invalid input for backtest: Rule not selected or invalid date range.");
+            showTrades = false;
+        }
+    }
+
+
+    // Represents a single P/E (Price-to-Earnings) ratio trading rule.
+    // This class is used to store the rule settings for buying and selling stocks based on their P/E ratio.
+    public class PERatioRuleData
+    {
+        public int RuleID { get; set; }
+        public decimal BuyLevel { get; set; }
+        public decimal SellLevel { get; set; }
+    }
+
+    // Represents a single trade executed during backtesting.
+    public class Trade
+    {
+        public int Number { get; set; }
+        public string Symbol { get; set; }
+        public string Type { get; set; }
+        public DateTime Date { get; set; }
+        public decimal PERatio { get; set; }
+        public decimal PricePerShare { get; set; } // New property for share price
+        public decimal BankAccountBalance { get; set; }
+        public decimal Shares { get; set; }
+    }
+
+    // Represents the response from a backtest operation.
+    // This class is used to encapsulate the results of a backtest, including the list of trades, balance and profit/loss.
+    public class BacktestResponse
+    {
+        public List<Trade> Trades { get; set; }
+        public decimal FinalTotalBalance { get; set; }
+        public decimal ProfitLossPercentage { get; set; }
+    }
+}

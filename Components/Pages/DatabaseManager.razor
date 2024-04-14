@@ -1,0 +1,209 @@
+﻿@page "/DatabaseManager"
+@inject HttpClient Http
+
+<h1>Database Manager</h1>
+
+<!-- Input for single or multiple stock symbols -->
+<h3>Add Stocks</h3>
+<input @bind="newStockSymbols" placeholder="Enter stock symbol(s) separated by commas" />
+<button class="btn btn-success" @onclick="AddStocks">Add Stocks</button>
+
+<!-- File Upload for Stocks -->
+<h3>Upload CSV File of Stocks</h3>
+<InputFile OnChange="HandleFileUpload" />
+
+<!-- Delete Stock -->
+<h3>Delete a Stock</h3>
+<input @bind="deleteStockSymbol" placeholder="Enter stock symbol" />
+<button class="btn btn-danger" @onclick="DeleteStock">Delete Stock</button>
+
+<!-- Get All Stocks -->
+<h3>All Stocks</h3>
+<button class="btn btn-primary" @onclick="GetAllStocks">Refresh Stock List</button>
+
+<!-- Display All Stocks -->
+@if (stocks != null && stocks.Any())
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Company ID</th>
+                <th>Symbol</th>
+                <th>Name</th>
+                <th>Sector</th>
+                <th>Industry</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var stock in stocks)
+            {
+                <tr>
+                    <td>@stock.CompanyID</td>
+                    <td>@stock.Symbol</td>
+                    <td>@stock.Name</td>
+                    <td>@stock.Sector</td>
+                    <td>@stock.Industry</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+else
+{
+    <p>No stocks are currently available.</p>
+}
+
+<!-- Display All Messages That May Be Useful To The User -->
+@if (!string.IsNullOrEmpty(message))
+{
+    <div class="alert alert-warning" role="alert">
+        @message
+    </div>
+}
+
+@code {
+    private string newStockSymbols = string.Empty; // For single or multiple stock symbols
+    private string deleteStockSymbol = string.Empty;
+    private List<StockItem> stocks = new List<StockItem>();
+    private string message = string.Empty;
+
+    // Initialisation method to fetch and display the latest stock data from the database upon component load.
+    protected override async Task OnInitializedAsync()
+    {
+        await GetAllStocks();
+    }
+
+    // Adds stocks to the database based on the symbols entered, then refreshes the stocks list.
+    private async Task AddStocks()
+    {
+        if (!string.IsNullOrWhiteSpace(newStockSymbols))
+        {
+            // Splits the input symbols by commas for bulk input or trims for single input.
+            var symbols = newStockSymbols.Contains(",")
+                ? newStockSymbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : new string[] { newStockSymbols.Trim() };
+
+            // Adds each stock symbol to the database asynchronously.
+            foreach (var symbol in symbols)
+            {
+                await AddStock(symbol);
+            }
+            newStockSymbols = string.Empty; // Clear the input field after adding
+            await GetAllStocks(); // Refresh the stock list
+        }
+    }
+
+    // Processes file upload to add stock symbols from a CSV, then refreshes the stock list.
+    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file != null)
+        {
+            // Reads the file with a size limit to prevent large uploads, processing line by line.
+            using var reader = new StreamReader(file.OpenReadStream(maxAllowedSize: 512000)); // Limit file size.
+            while (!reader.EndOfStream)
+            {
+                var line = await reader.ReadLineAsync();
+                // Splits each line into stock symbols and adds them to the database.
+                var symbols = line.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var symbol in symbols)
+                {
+                    await AddStock(symbol);
+                }
+            }
+            await GetAllStocks(); // Refresh the stock list after uploading and processing the file.
+        }
+    }
+
+    // Adds a single stock to the database and updates the user message based on the operation result.
+    private async Task AddStock(string stockSymbol)
+    {
+        if (!string.IsNullOrWhiteSpace(stockSymbol))
+        {
+            var stockData = new { ticker = stockSymbol };
+            var response = await Http.PostAsJsonAsync("http://localhost:7144/api/AddStockToDatabase", stockData);
+
+            if (response.IsSuccessStatusCode)
+            {
+                // Update the message to reflect the successful addition.
+                message = $"Successfully added stock {stockSymbol}.";
+            }
+            else
+            {
+                // Update the message to indicate the failure.
+                message = $"Failed to add stock {stockSymbol}.";
+                return;
+            }
+        }
+        else
+        {
+            // Sets message if input is invalid.
+            message = "Stock symbol is missing or whitespace.";
+        }
+    }
+
+
+    // Attempts to delete a stock using its symbol and updates the UI with the result.
+    private async Task DeleteStock()
+    {
+        if (!string.IsNullOrWhiteSpace(deleteStockSymbol))
+        {
+            try
+            {
+                var stockData = new { ticker = deleteStockSymbol };
+                var response = await Http.PostAsJsonAsync("http://localhost:7144/api/DeleteStockFromDatabase", stockData);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    message = await response.Content.ReadAsStringAsync();
+                    deleteStockSymbol = string.Empty; // Clear the input field.
+                    await GetAllStocks(); // Refresh the stock list.
+                }
+                else
+                {
+                    message = $"Failed to delete {deleteStockSymbol}: {response.ReasonPhrase}";
+                }
+            }
+            catch (Exception ex)
+            {
+                message = $"Exception while deleting {deleteStockSymbol}: {ex.Message}";
+            }
+        }
+        else
+        {
+            message = "Please enter a stock symbol to delete.";
+        }
+    }
+
+    // Fetches all stock entries from the database and updates the UI with the current stock list or an error message.
+    private async Task GetAllStocks()
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<StockItem>>("http://localhost:7144/api/GetAllStocks");
+            if (response != null)
+            {
+                stocks = response; // Updates the local stock list with the retrieved data.
+            }
+            else
+            {
+                message = "Failed to retrieve stocks."; // Sets a message if no stocks could be retrieved.
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine("An error occurred while fetching all stocks: " + ex.ToString());
+            message = "An error occurred while attempting to fetch the stocks. Please try again.";
+        }
+    }
+
+    // Represents a single stock, containing details about the company.
+    public class StockItem
+    {
+        public int CompanyID { get; set; }
+        public string Symbol { get; set; }
+        public string Name { get; set; }
+        public string Sector { get; set; }
+        public string Industry { get; set; }
+    }
+}

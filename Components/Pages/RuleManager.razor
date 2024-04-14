@@ -1,0 +1,276 @@
+﻿@page "/RuleManager"
+@inject HttpClient Http
+@using Newtonsoft.Json
+@using System.Text
+
+<h1>Rule Manager</h1>
+<div>
+    <select @bind="selectedValuationModel"> <!-- Dropdown for selecting the valuation model -->
+        <option value="">Select model</option> <!-- Default empty option prompting user selection -->
+        <option value="P/E">P/E Ratio</option> <!-- Option for P/E Ratio valuation model -->
+    </select>
+
+    <!-- P/E Level Entries -->
+    <input @bind="buyLevel" placeholder="Enter Buy Level (E.g. 7)" />
+    <input @bind="sellLevel" placeholder="Enter Sell Level (E.g. 11)" />
+
+    <button class="btn btn-success" @onclick="AddRule">Add Rule</button> <!-- Button to trigger rule addition -->
+    <button class="btn btn-primary" @onclick="RefreshRules">Refresh Rules</button> <!-- Button to refresh the list of rules -->
+</div>
+
+
+<!-- Check if tradingRules list is not empty before rendering -->
+@if (tradingRules != null)
+{
+    <!-- Display trading rules in a table -->
+    <table class="table text-center">
+        <thead>
+            <tr>
+                <th>Rule #</th>
+                <th>Base Valuation Model</th>
+                <th>Buy Level</th>
+                <th>Sell Level</th>
+                <th>Delete Rule Option</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Iterate over each trading rule and display its details -->
+            @foreach (var rule in tradingRules)
+            {
+                <tr>
+                    <td>@rule.RuleID</td>
+                    <td>@rule.BaseValuationModel</td>
+                    <td>@rule.BuyLevel</td>
+                    <td>@rule.SellLevel</td>
+                    <td><button class="btn btn-danger" @onclick="() => DeleteRule(rule)">Delete Rule</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<!-- Define the various elements styles -->
+<style>
+    .table th, .table td {
+        vertical-align: middle;
+    }
+
+    .btn-danger, .btn-success {
+        border: none;
+        padding: 6px 12px;
+        border-radius: .25rem;
+        cursor: pointer;
+        font-size: 1rem;
+    }
+
+    .btn-danger {
+        /* styles for the red delete button */
+        background-color: #dc3545;
+        color: white;
+    }
+    
+    .btn-danger:hover {
+        background-color: #c82333;
+    }
+
+    .btn-success {
+        background-color: #28a745;
+        color: white;
+    }
+    
+    .btn-success:hover {
+        background-color: #218838;
+    }
+
+    .profit, .loss {
+        font-weight: bold;
+        font-size: 1.1em;
+        padding: 5px;
+        border-radius: 5px;
+    }
+
+    .profit {
+        color: #155724;
+        background-color: #d4edda;
+    }
+
+    .loss {
+        color: #721c24;
+        background-color: #f8d7da;
+    }
+</style>
+
+@code {
+    private string stockInput = "";
+    private string message = "";
+    private readonly string presetStocks = "AAPL,MSFT,GOOGL"; // Preset list of stocks
+    private List<PeRatioItem> peRatios;
+    private List<TradingRule> tradingRules = new List<TradingRule>();
+    private string selectedValuationModel = string.Empty;
+    private string buyLevel = string.Empty;
+    private string sellLevel = string.Empty;
+
+    // Initialises component state and refreshes trading rules on component load.
+    protected override async Task OnInitializedAsync()
+    {
+        selectedValuationModel = "P/E";
+        await RefreshRules();
+    }
+
+    // Formats a profit or loss percentage string, adding a "+" sign for positive values and "-" sign for negative values.
+    private string FormatProfitLoss(string profitLossPercentage)
+    {
+        if (!decimal.TryParse(profitLossPercentage.TrimEnd('%'), out var value))
+        {
+            return profitLossPercentage; // If not a number, return the original string
+        }
+
+        // Prefix positive numbers with "+", negative numbers with "-" and re-append "%"
+        return value > 0 ? $"+{value}%" : $"-{value}%";
+    }
+
+    // Adds a new trading rule if all required fields are correctly filled.
+    private async Task AddRule()
+    {
+        if (!string.IsNullOrEmpty(selectedValuationModel) &&
+            decimal.TryParse(buyLevel, out var parsedBuyLevel) &&
+            decimal.TryParse(sellLevel, out var parsedSellLevel))
+        {
+            // Construct a new rule object with user input.
+            var newRule = new TradingRule
+                {
+                    BaseValuationModel = selectedValuationModel,
+                    BuyLevel = parsedBuyLevel,
+                    SellLevel = parsedSellLevel,
+                    ProfitLossPercentage = "0%", // Default value
+                    BankAccountBalance = 0.00M // Default value
+                };
+
+            // Send new rule to AddPERatioRule.
+            var response = await Http.PostAsJsonAsync("http://localhost:7144/api/AddPERatioRule", newRule);
+
+            if (response.IsSuccessStatusCode)
+            {
+                message = "Rule added successfully."; // Success feedback.
+
+                // Reset form fields.
+                buyLevel = string.Empty;
+                sellLevel = string.Empty;
+                selectedValuationModel = string.Empty;
+            }
+            else
+            {
+                message = $"Failed to add rule. Status: {response.StatusCode}";
+            }
+        }
+        else
+        {
+            message = "Please ensure all fields are filled out correctly.";
+        }
+
+        // Refresh the list of rules.
+        await RefreshRules();
+    }
+
+    // Deletes a specified trading rule.
+    private async Task DeleteRule(TradingRule ruleToDelete)
+    {
+        // Handle null input case.
+        if (ruleToDelete == null)
+        {
+            message = "The rule to delete cannot be null.";
+            return;
+        }
+
+        var response = await Http.DeleteAsync($"http://localhost:7144/api/DeletePERatioRule/{ruleToDelete.RuleID}");
+
+        if (response.IsSuccessStatusCode)
+        {
+            message = "Rule deleted successfully."; // Success feedback.
+            tradingRules.Remove(ruleToDelete); // Remove the rule from the local list if deletion is successful.
+        }
+        else
+        {
+            message = $"Failed to delete rule. Status: {response.StatusCode}";
+        }
+
+        // Refresh the list of rules.
+        await RefreshRules();
+    }
+
+    // Fetches and updates the trading rules from the server.
+    private async Task RefreshRules()
+    {
+        try
+        {
+            // Get the rules from the GetPERatioRules function.
+            var response = await Http.GetAsync("http://localhost:7144/api/GetPERatioRules");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync(); // Read the JSON response content.
+                var rulesFromDb = JsonConvert.DeserializeObject<List<PERatioRuleData>>(responseContent); // Deserialize JSON to list of rules.
+
+                tradingRules.Clear(); // Clear existing rules before adding new ones.
+                foreach (var rule in rulesFromDb)
+                {
+                    // Add each rule to the local list.
+                    tradingRules.Add(new TradingRule
+                        {
+                            RuleID = rule.RuleID,
+                            BuyLevel = rule.BuyLevel,
+                            SellLevel = rule.SellLevel,
+                            BaseValuationModel = "P/E" // Set "P/E" as the BaseValuationModel for each rule.
+                        });
+                }
+            }
+            else
+            {
+                // Log the status code and reason to the console.
+                Console.WriteLine($"Failed to refresh trading rules. Status code: {response.StatusCode}. Reason: {response.ReasonPhrase}");
+            }
+        }
+        catch (HttpRequestException e)
+        {
+            // Log the HttpRequestException details to the console.
+            Console.WriteLine($"An HTTP request error occurred: {e.Message}");
+        }
+        catch (JsonException e)
+        {
+            // Log JSON deserialization errors.
+            Console.WriteLine($"An error occurred while deserializing the response content: {e.Message}");
+        }
+        catch (Exception e)
+        {
+            // Log unexpected exceptions.
+            Console.WriteLine($"An unexpected error occurred: {e.Message}");
+        }
+    }
+
+    // Represents a trading rule with details about trading thresholds and financial data.
+    public class TradingRule
+    {
+        public int RuleID { get; set; }
+        public string BaseValuationModel { get; set; }
+        public decimal BuyLevel { get; set; }
+        public decimal SellLevel { get; set; }
+        public string ProfitLossPercentage { get; set; } = "0%";
+        public decimal BankAccountBalance { get; set; } = 0.00M;
+    }
+
+    // Represents data for a trading rule specifically for P/E ratio-based decisions.
+    public class PERatioRuleData
+    {
+        public int RuleID { get; set; }
+        public decimal BuyLevel { get; set; }
+        public decimal SellLevel { get; set; }
+    }
+
+    // Represents a P/E ratio item with associated stock information.
+    public class PeRatioItem
+    {
+        public string Symbol { get; set; }
+        public string CompanyName { get; set; }
+        public string PeRatio { get; set; }
+    }
+}
